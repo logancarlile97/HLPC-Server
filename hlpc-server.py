@@ -3,6 +3,7 @@
 # 11/14/2021
 
 import argparse
+from genericpath import exists
 import socket
 import threading
 import sys
@@ -10,6 +11,31 @@ import logging
 import time
 import os
 import platform
+
+# set environment variables
+
+# get path where the script is located
+
+scriptPath = os.path.dirname(os.path.abspath(__file__))
+
+# set the data folder
+
+dataPath = os.path.join(scriptPath, "data")
+
+# set the name and path of the force outage file. if this file exists
+#  then the HLPC Server will force agents to shutdown clients
+
+outageFilePath = os.path.join(dataPath, "outageNow")
+
+# server running file, this file is created when the server starts 
+# and is deleted when the server stops, it prevents the server from 
+# being started more than once
+
+serverRunningPath = os.path.join(dataPath, "serverIsRunning")
+
+# server shutdown file, this file is created to safely shutdown the server
+
+serverShutdownFilePath = os.path.join(dataPath, "shutdownServerNow")
 
 def getArgs():
     """This function will retrive arguments from the user via terminal arguments"""
@@ -26,7 +52,13 @@ def getArgs():
 
     serverModeSelect.add_argument('--start',
                                   action='store_true',
-                                  help='Use this argument, combined with an arguments in Start Server, to control server')
+                                  help='Use this argument, combined with an arguments in Start Server, to start server')
+
+    # option to stop a running server
+
+    serverModeSelect.add_argument('--stop',
+                                  action='store_true',
+                                  help='Use this argument to stop a running server')
 
     # option to send commands to a running server
 
@@ -66,7 +98,7 @@ def getArgs():
 
     # argument that, if used, will simulate a power outtage, triggering a shutdown event
 
-    serverControlGroup.add_argument('--power-outtage',
+    serverControlGroup.add_argument('--force-outage',
                                     dest='pwrOutSim',
                                     action='store_true',
                                     help='Use this option to simulate a power outage on a running HLPC server')
@@ -95,6 +127,69 @@ def loggingInit():
 
     log.basicConfig(level=logging.INFO,
                     format='%(asctime)s [%(levelname)s] - %(message)s')
+
+
+def preServerInitChecks():
+
+    """This function will ensure all needed directories exist 
+    before attempting to start the server"""
+
+    # log that pre server start checks are being run
+
+    log.info(f"Running Pre Server Start Checks")
+
+    # log check for data folder
+
+    log.info(f"Ensuring data folder exists at path {dataPath}")
+
+    # if the data directory does not exist
+
+    if not(os.path.exists(dataPath)):
+        # tell the user
+
+        log.warning(f"Data folder not found attempting to create it")
+        
+        # try to create the folder
+
+        try:
+            os.makedirs(dataPath)
+
+        # if it fails tell the user
+
+        except Exception as e:
+            log.critical(f"Could not create the data folder due to error:")
+            log.critical(f"{e}")
+
+            # and exit the program 
+
+            sys.exit()
+
+    # otherwise tell the user it was found
+
+    else:
+        log.info(f"Data folder found... proceeding")
+    
+    # check if the server is already running
+
+    log.info(f"Checking if the server is already running")
+
+    # if the server is already running
+
+    if os.path.exists(serverRunningPath):
+
+        # tell the user
+
+        log.error(f"The server seems to already be running")
+        log.error(f"If this is not correct please delete the following file:")
+        log.error(f"{serverRunningPath}")
+
+        # exit cleanly
+
+        sys.exit()
+
+    # tell user that pre server start checks are complete
+
+    log.info(f"Pre Server Start Checks finished proceeding")
 
 
 def serverInit(ip, port):
@@ -151,6 +246,10 @@ def serverInit(ip, port):
     # tell the user that the server has been started
 
     log.info(f"HLPC server has been started")
+
+    # create the server running file 
+
+    open(serverRunningPath, 'w').close()
 
     # return the server object
 
@@ -244,7 +343,120 @@ def serverListen():
         log.info(f"Active Client Connections = {threading.active_count()-2}")
 
 
+def getOsPlatform():
+
+    """This function will return the os platform if the program can run on it. 
+    Otherwise it will exit the program."""
+
+    osPlatform = platform.system()
+
+    # if detected os is windows
+
+    if osPlatform == 'Windows':
+        log.info(f"{osPlatform} operating system detected")
+        return osPlatform
+
+    # if detected os is Linux
+
+    if osPlatform == 'Linux':
+        log.info(f"{osPlatform} operating system detected")
+        return osPlatform
+    
+    # otherwise 
+
+    else:
+        log.error(f'Unsupported operating system detected: {osPlatform}')
+        sys.exit()
+
+
+def forceOutage():
+
+    """This function will perform the neccessary action to tell the 
+    server to force the agents to shutdown"""
+
+    # if the shutdownNow file already exists
+
+    if os.path.exists(outageFilePath):
+
+        # tell the user that a force shutdown is already being processed
+
+        log.error(f"A force outtage command is already being processed")
+
+    # if the file does not exist
+
+    elif not(os.path.exists(outageFilePath)):
+
+        # try to create it
+
+        try:
+            open(outageFilePath, 'a').close()
+
+        # if it fails notify the user
+
+        except Exception as e:
+            log.error(f"Could not force an outtage due to the following error:")
+            log.error(f"{e}")
+
+
+def cleanup():
+
+    """This function will handle cleanup of files when the server is stopped"""
+
+    # log that the server is currently attempting cleanup
+
+    log.info(f"Attempting server cleanup")
+
+    # delete the outageNow file if it exists
+
+    if os.path.exists(outageFilePath):
+        log.info(f"Attempting to cleanup {outageFilePath}")
+        os.unlink(outageFilePath)
+
+    # delete the server running file if it exists
+
+    if os.path.exists(serverRunningPath):
+        log.info(f"Attempting to cleanup {serverRunningPath}")
+        os.unlink(serverRunningPath)
+
+    # delete the shutdownServerNow file if it exists
+
+    if os.path.exists(serverShutdownFilePath):
+        log.info(f"Attempting to cleanup {serverShutdownFilePath}")
+        os.unlink(serverShutdownFilePath)
+
+    # tell the user that the cleanup is complete
+
+    log.info(f"Cleanup complete")
+    
+
+def serverStop():
+
+    """This function will handle stopping the server"""
+
+    # try to run the server cleanup
+
+    try:
+        cleanup()
+
+    # if it fails tell the user
+
+    except Exception as e:
+        log.warning(f"The server was not able to perform a cleanup operation because of the following error:")
+        log.warning(f"{e}")
+        log.warning(f"This may cause future problems")
+
+    # if cleanup ran succesfully tell the user
+
+    else: 
+        log.info(f"Server cleanup finished successfully")
+
+    # exit cleanly
+
+    sys.exit()
+
+
 def serverDaemon():
+
     """This function will start serverListen in a thread and 
     wait for the user to shutdown the server"""
 
@@ -275,34 +487,21 @@ def serverDaemon():
             log.critical(
                 f"KeyboardInterupt detected, shutting down the server")
 
-            # exit cleanly
+            # stop the server
 
-            sys.exit()
+            serverStop()
 
-def getOsPlatform():
+        # if the shutdown file exists then
 
-    """This function will return the os platform if the program can run on it. 
-    Otherwise it will exit the program."""
+        if os.path.exists(serverShutdownFilePath):
+            
+            # tell the user
 
-    osPlatform = platform.system()
+            log.warning(f"shutdownServerNow file detected shuting down server now")
 
-    # if detected os is windows
+            # stop the server
 
-    if osPlatform == 'Windows':
-        log.info(f"{osPlatform} operating system detected")
-        return osPlatform
-
-    # if detected os is Linux
-
-    if osPlatform == 'Linux':
-        log.info(f"{osPlatform} operating system detected")
-        return osPlatform
-    
-    # otherwise 
-
-    else:
-        log.error(f'Unsupported operating system detected: {osPlatform}')
-        sys.exit()
+            serverStop()
 
 # if this program is being run directly
 
@@ -311,10 +510,6 @@ if __name__ == "__main__":
     # initialize logging
 
     loggingInit()
-
-    # determine host os
-
-    getOsPlatform()
 
     # retrive arguments from user
 
@@ -325,6 +520,10 @@ if __name__ == "__main__":
     # if the start argument was specified
 
     if argsObj.start:
+
+        # do the prechecks before starting the server
+
+        preServerInitChecks()
 
         # initialize the server and set to the server object
 
@@ -337,5 +536,89 @@ if __name__ == "__main__":
     # if the control argument was specified
 
     elif argsObj.control:
-        print('Control')
-        pass
+        
+        # if user specified to force a power outage
+
+        if argsObj.pwrOutSim:
+            
+            # run the force outage function
+
+            forceOutage()
+
+        # if user does not specify a control command
+
+        else:
+
+            log.error(f'Could not detect valid control command')
+
+    # if the stop argument was specified
+
+    elif argsObj.stop:
+
+        # if the data folder does not exist exit the program as there 
+        # is no way the server would start without it
+
+        if not(os.path.exists(dataPath)):
+            log.info("No server is currently running")
+            sys.exit()
+
+
+        # if a server is not running
+
+        if not(os.path.exists(serverRunningPath)):
+
+            # tell the user
+
+            log.info(f"No server is currently running")
+
+            # perform a cleanup
+
+            cleanup()
+
+            # exit the program 
+
+            sys.exit()
+
+        # otherwise attempt to stop the server
+
+        else:
+            
+            # tell the user that the server if being stopped
+
+            log.info(f"Attempting to stop HLPC Server...")
+
+            # create the server shutdown file
+
+            open(serverShutdownFilePath, 'w').close()
+
+            # tell the user that the program will wait to see if the server stops
+
+            log.info(f"Waiting for server to stop...")
+
+            # wait 20 seconds for the server to stop
+
+            time.sleep(20)
+
+            # if the server did not shutdown
+
+            if os.path.exists(serverRunningPath):
+
+                # report an error to the user
+
+                log.error(f"Could not shutdown the server, please manually check to see if it is running!")
+
+                # exit cleanly
+
+                sys.exit()
+
+            # otherwise 
+
+            else: 
+
+                # tell the user the server was shutdown
+
+                log.info(f"Server successfully shutdown")
+
+                # exit the program 
+
+                sys.exit()
