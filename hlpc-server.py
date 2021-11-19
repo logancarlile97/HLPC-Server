@@ -3,7 +3,6 @@
 # 11/14/2021
 
 import argparse
-from genericpath import exists
 import socket
 import threading
 import sys
@@ -11,6 +10,7 @@ import logging
 import time
 import os
 import platform
+import pyinputplus as pyip
 
 # set environment variables
 
@@ -38,6 +38,7 @@ serverRunningPath = os.path.join(dataPath, "serverIsRunning")
 serverShutdownFilePath = os.path.join(dataPath, "shutdownServerNow")
 
 def getArgs():
+
     """This function will retrive arguments from the user via terminal arguments"""
 
     # get necesary arguments from the command line
@@ -65,6 +66,12 @@ def getArgs():
     serverModeSelect.add_argument('--control',
                                   action='store_true',
                                   help='Use this argument, combined with an argument in Control Server, to control server')
+
+    # option to perform a cleanup of server files
+
+    serverModeSelect.add_argument('--cleanup',
+                                  action='store_true',
+                                  help='Use this argument to perform a cleanup of server files. This argument requires user input and cannot be run quietly')
 
     # Create an argument group for starting the server
 
@@ -113,6 +120,7 @@ def getArgs():
 
 
 def loggingInit():
+
     """This function will initialize logging"""
 
     # create a global variable log
@@ -180,8 +188,7 @@ def preServerInitChecks():
         # tell the user
 
         log.error(f"The server seems to already be running")
-        log.error(f"If this is not correct please delete the following file:")
-        log.error(f"{serverRunningPath}")
+        log.error(f"If this is not correct please use the --cleanup argument to perform a cleanup of server files")
 
         # exit cleanly
 
@@ -193,6 +200,7 @@ def preServerInitChecks():
 
 
 def serverInit(ip, port):
+
     """This function will attempt to initialize a socket server bound to ip and port.
     If it fails it will print an error and exit to program.
     If sucessful it will return the socket object"""
@@ -257,6 +265,7 @@ def serverInit(ip, port):
 
 
 def handleClient(conn, client_addr):
+
     """This function will handle comms to a connected client
     It will take conn a socket object for the client and addr which 
     contains the ip address of the client."""
@@ -316,6 +325,7 @@ def handleClient(conn, client_addr):
 
 
 def serverListen():
+
     """This function will listen for new connections. 
     When a new connection is detected a thread will be 
     created to handle the client"""
@@ -389,7 +399,7 @@ def forceOutage():
         # try to create it
 
         try:
-            open(outageFilePath, 'a').close()
+            open(outageFilePath, 'w').close()
 
         # if it fails notify the user
 
@@ -427,7 +437,7 @@ def cleanup():
     # tell the user that the cleanup is complete
 
     log.info(f"Cleanup complete")
-    
+
 
 def serverStop():
 
@@ -476,9 +486,33 @@ def serverDaemon():
 
         try:
 
-            # wait for 5 seconds to prevent overutilization of resources
+            # wait for 1 second to prevent overutilization of resources
 
-            time.sleep(5)
+            time.sleep(1)
+
+            # ensure the serverIsRunning file exists while server is running
+
+            if not(os.path.exists(serverRunningPath)):
+                
+                # log that the file was not found 
+
+                log.warning(f'{serverRunningPath} seems to have been deleted, attempting to recreate')
+                
+                # create the file
+
+                open(serverRunningPath, 'w').close()
+
+            # if the shutdown file exists then
+
+            if os.path.exists(serverShutdownFilePath):
+                
+                # tell the user
+
+                log.warning(f"shutdownServerNow file detected shuting down server now")
+
+                # stop the server
+
+                serverStop()
 
         except KeyboardInterrupt:
 
@@ -486,18 +520,6 @@ def serverDaemon():
 
             log.critical(
                 f"KeyboardInterupt detected, shutting down the server")
-
-            # stop the server
-
-            serverStop()
-
-        # if the shutdown file exists then
-
-        if os.path.exists(serverShutdownFilePath):
-            
-            # tell the user
-
-            log.warning(f"shutdownServerNow file detected shuting down server now")
 
             # stop the server
 
@@ -595,9 +617,21 @@ if __name__ == "__main__":
 
             log.info(f"Waiting for server to stop...")
 
-            # wait 20 seconds for the server to stop
+            # check if server has stopped for stopTimeout seconds then timeout
+            
+            stopTimeout = 60 # timeout in seconds
 
-            time.sleep(20)
+            count = 0 # count to increment
+
+            while os.path.exists(serverRunningPath) and count < stopTimeout:
+
+                # wait one second
+
+                time.sleep(1)
+
+                # increment count
+
+                count += 1
 
             # if the server did not shutdown
 
@@ -606,6 +640,7 @@ if __name__ == "__main__":
                 # report an error to the user
 
                 log.error(f"Could not shutdown the server, please manually check to see if it is running!")
+                log.error(f'If you are sure the server is not running try to use the --cleanup argument')
 
                 # exit cleanly
 
@@ -622,3 +657,45 @@ if __name__ == "__main__":
                 # exit the program 
 
                 sys.exit()
+
+    # if the cleanup argument was specified
+
+    elif argsObj.cleanup:
+
+        # warn the user that this command may be dangerous
+
+        log.warning('This command should only be run if you are 100 percent sure that the HLPC Server is not running!!!')
+
+        # ask the user to confirm if they want to perform a cleanup
+
+        cleanupConfirmation = pyip.inputYesNo('Are you sure you want to perform a cleanup? [y/N] ', default='no', limit=1)
+
+        # if the user entered no
+
+        if cleanupConfirmation == 'no':
+
+            # log the user entered no
+
+            log.info(f'Exiting...')
+
+            # exit cleanly
+
+            sys.exit()
+
+        # if the user entered yes
+
+        elif cleanupConfirmation == 'yes':
+
+            # log the user entered yes
+
+            log.info(f'User entered yes')
+
+            # run the cleanup function
+
+            cleanup()
+
+            # exit cleanly
+
+            sys.exit()
+
+            
